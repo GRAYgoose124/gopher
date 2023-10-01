@@ -66,28 +66,59 @@ func (p *PeerApp) handleClientConnection(conn net.Conn) {
 		return
 	}
 
-	// Check if the initial message is in the format "LISTENING_ON:<port>"
+	// Check if the initial message is in the format "LISTENING_ON:<hostname>:<port>"
 	if strings.HasPrefix(initialMessage, "LISTENING_ON:") {
-		clientState.ListeningPort = strings.TrimSpace(strings.TrimPrefix(initialMessage, "LISTENING_ON:"))
-		if !clientState.BackConnected && clientState.ListeningPort != "" {
-			go func() {
-				backConn, err := net.Dial("tcp", addr[:strings.LastIndex(addr, ":")]+":"+clientState.ListeningPort)
-				if err != nil {
-					p.App.QueueUpdateDraw(func() {
-						p.Output.SetText(p.Output.GetText(true) + "Error creating back connection to client: " + err.Error() + "\n")
-					})
-					return
-				}
-				serverAddr := backConn.RemoteAddr().String()
-				p.Servers[serverAddr] = &ServerState{Conn: backConn, Address: serverAddr}
-				clientState.BackConnected = true
-			}()
+		parts := strings.Split(strings.TrimPrefix(initialMessage, "LISTENING_ON:"), ":")
+		if len(parts) != 2 {
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Client " + addr + " did not send a valid listening hostname and port: " + initialMessage + "\n")
+			})
+			return
+		}
+		clientState.ListeningPort = strings.TrimSpace(parts[1])
+		clientHostname := strings.TrimSpace(parts[0])
+
+		// if clientHostname is not already in p.Servers, then add it
+		if _, ok := p.Servers[clientHostname]; !ok {
+
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Client " + addr + " listening on " + clientHostname + ":" + clientState.ListeningPort + "\n")
+			})
+
+			if !clientState.BackConnected && clientState.ListeningPort != "" {
+				go func() {
+					serverAddr := clientHostname + ":" + clientState.ListeningPort
+					backConn, err := net.Dial("tcp", serverAddr)
+					if err != nil {
+						p.App.QueueUpdateDraw(func() {
+							p.Output.SetText(p.Output.GetText(true) + "Error creating back connection to client: " + err.Error() + "\n")
+						})
+						return
+					} else {
+						p.App.QueueUpdateDraw(func() {
+							p.Output.SetText(p.Output.GetText(true) + "Back connection established to client " + addr + "\n")
+						})
+					}
+
+					hostname, err := os.Hostname()
+					if err != nil {
+						p.App.QueueUpdateDraw(func() {
+							p.Output.SetText(p.Output.GetText(true) + "Error fetching hostname: " + err.Error() + "\n")
+						})
+						return
+					}
+					// Send the LISTENING_ON message with the client's listening port and hostname
+					fmt.Fprintf(conn, "LISTENING_ON:%s:%s\n", hostname, p.ListeningPort)
+
+					p.Servers[clientHostname] = &ServerState{Conn: backConn, Address: serverAddr}
+					clientState.BackConnected = true
+				}()
+			}
 		}
 	} else {
 		p.App.QueueUpdateDraw(func() {
-			p.Output.SetText(p.Output.GetText(true) + "Client " + addr + " did not send a valid listening port.\n")
+			p.Output.SetText(p.Output.GetText(true) + "Client " + addr + ": " + initialMessage)
 		})
-		return
 	}
 
 	for {
@@ -115,8 +146,13 @@ func (p *PeerApp) startServer(port string) {
 	}
 	defer ln.Close()
 
+	host, err := os.Hostname()
+	if err != nil {
+		host = "localhost"
+	}
+
 	p.App.QueueUpdateDraw(func() {
-		p.Output.SetText(p.Output.GetText(true) + "Listening on port " + port + "\n")
+		p.Output.SetText(p.Output.GetText(true) + "Listening on " + host + ":" + port + "\n")
 	})
 	for {
 		conn, err := ln.Accept()
@@ -152,10 +188,17 @@ func (p *PeerApp) processCommand(cmd string) {
 			return
 		}
 
-		// Send the LISTENING_ON message with the client's listening port
-		fmt.Fprintf(conn, "LISTENING_ON:%s\n", p.ListeningPort)
+		hostname, err := os.Hostname()
+		if err != nil {
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Error fetching hostname: " + err.Error() + "\n")
+			})
+			return
+		}
+		// Send the LISTENING_ON message with the client's listening port and hostname
+		fmt.Fprintf(conn, "LISTENING_ON:%s:%s\n", hostname, p.ListeningPort)
 
-		p.Servers[address] = &ServerState{Conn: conn, Address: address}
+		p.Servers[strings.Split(address, ":")[0]] = &ServerState{Conn: conn, Address: address}
 		p.App.QueueUpdateDraw(func() {
 			p.Output.SetText(p.Output.GetText(true) + "Connected to server " + address + "\n")
 		})
@@ -202,6 +245,28 @@ func (p *PeerApp) processCommand(cmd string) {
 			p.Output.SetText(p.Output.GetText(true) + response)
 		})
 
+	case strings.HasPrefix(cmd, "!dc "):
+		parts := strings.Split(cmd, " ")
+		if len(parts) != 2 {
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Invalid format. Use '!dc <server>'\n")
+			})
+			return
+		}
+		serverAddr := parts[1]
+		server, ok := p.Servers[serverAddr]
+		if !ok {
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Not connected to server " + serverAddr + "\n")
+			})
+			return
+		}
+		server.Conn.Close()
+		delete(p.Servers, serverAddr)
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Disconnected from server " + serverAddr + "\n")
+		})
+
 	case cmd == "!q":
 		for _, server := range p.Servers {
 			server.Conn.Close()
@@ -216,10 +281,11 @@ func (p *PeerApp) processCommand(cmd string) {
 		p.App.QueueUpdateDraw(func() {
 			p.Output.SetText(p.Output.GetText(true) + "Commands:\n" +
 				"\t!c <host:port> - connect to a server\n" +
-				"\t!s <server> <message> - send a message to a server\n" +
+				"\t!s <host> <message> - send a message to a server\n" +
 				"\t!sa <message> - send a message to all servers\n" +
 				"\t!cs - list connected clients\n" +
 				"\t!ss - list connected servers\n" +
+				"\t!dc <host> - disconnect from a server\n" +
 				"\t!q - quit\n")
 		})
 	default:
