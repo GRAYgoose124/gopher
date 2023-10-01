@@ -14,6 +14,7 @@ import (
 
 type ClientState struct {
 	Conn          net.Conn
+	ListeningPort string
 	BackConnected bool
 }
 
@@ -28,6 +29,7 @@ type PeerApp struct {
 	Input          *cview.InputField
 	Clients        map[string]*ClientState
 	Servers        map[string]*ServerState
+	ListeningPort  string
 	CommandHistory []string
 	CurrentCmdIdx  int
 }
@@ -55,11 +57,21 @@ func (p *PeerApp) handleClientConnection(conn net.Conn) {
 	p.Clients[addr] = clientState
 	defer delete(p.Clients, addr)
 
-	if !clientState.BackConnected {
-		parts := strings.Split(addr, ":")
-		if len(parts) == 2 {
+	reader := bufio.NewReader(conn)
+	initialMessage, err := reader.ReadString('\n')
+	if err != nil {
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Error reading from client " + addr + ": " + err.Error() + "\n")
+		})
+		return
+	}
+
+	// Check if the initial message is in the format "LISTENING_ON:<port>"
+	if strings.HasPrefix(initialMessage, "LISTENING_ON:") {
+		clientState.ListeningPort = strings.TrimSpace(strings.TrimPrefix(initialMessage, "LISTENING_ON:"))
+		if !clientState.BackConnected && clientState.ListeningPort != "" {
 			go func() {
-				backConn, err := net.Dial("tcp", addr)
+				backConn, err := net.Dial("tcp", addr[:strings.LastIndex(addr, ":")]+":"+clientState.ListeningPort)
 				if err != nil {
 					p.App.QueueUpdateDraw(func() {
 						p.Output.SetText(p.Output.GetText(true) + "Error creating back connection to client: " + err.Error() + "\n")
@@ -71,9 +83,13 @@ func (p *PeerApp) handleClientConnection(conn net.Conn) {
 				clientState.BackConnected = true
 			}()
 		}
+	} else {
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Client " + addr + " did not send a valid listening port.\n")
+		})
+		return
 	}
 
-	reader := bufio.NewReader(conn)
 	for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
@@ -90,6 +106,7 @@ func (p *PeerApp) handleClientConnection(conn net.Conn) {
 
 func (p *PeerApp) startServer(port string) {
 	ln, err := net.Listen("tcp", ":"+port)
+	p.ListeningPort = port
 	if err != nil {
 		p.App.QueueUpdateDraw(func() {
 			p.Output.SetText(p.Output.GetText(true) + "Error starting server: " + err.Error() + "\n")
@@ -134,6 +151,10 @@ func (p *PeerApp) processCommand(cmd string) {
 			})
 			return
 		}
+
+		// Send the LISTENING_ON message with the client's listening port
+		fmt.Fprintf(conn, "LISTENING_ON:%s\n", p.ListeningPort)
+
 		p.Servers[address] = &ServerState{Conn: conn, Address: address}
 		p.App.QueueUpdateDraw(func() {
 			p.Output.SetText(p.Output.GetText(true) + "Connected to server " + address + "\n")
