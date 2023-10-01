@@ -57,22 +57,30 @@ func (p *PeerApp) handleClientConnection(conn net.Conn) {
 	for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
-			p.Output.SetText(p.Output.GetText(true) + "Client " + addr + " disconnected.\n")
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Client " + addr + " disconnected.\n")
+			})
 			return
 		}
-		p.Output.SetText(p.Output.GetText(true) + "Client " + addr + ": " + message)
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Client " + addr + ": " + message)
+		})
 	}
 }
 
 func (p *PeerApp) startServer(port string) {
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		p.Output.SetText(p.Output.GetText(true) + "Error starting server: " + err.Error() + "\n")
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Error starting server: " + err.Error() + "\n")
+		})
 		return
 	}
 	defer ln.Close()
 
-	p.Output.SetText(p.Output.GetText(true) + "Listening on port " + port + "\n")
+	p.App.QueueUpdateDraw(func() {
+		p.Output.SetText(p.Output.GetText(true) + "Listening on port " + port + "\n")
+	})
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -93,28 +101,38 @@ func (p *PeerApp) processCommand(cmd string) {
 	case strings.HasPrefix(cmd, "!c "):
 		parts := strings.Split(cmd, " ")
 		if len(parts) != 2 {
-			p.Output.SetText(p.Output.GetText(true) + "Invalid format. Use '!connect host:port'\n")
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Invalid format. Use '!connect host:port'\n")
+			})
 			return
 		}
 		address := parts[1]
 		conn, err := net.Dial("tcp", address)
 		if err != nil {
-			p.Output.SetText(p.Output.GetText(true) + "Error connecting to server: " + err.Error() + "\n")
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Error connecting to server: " + err.Error() + "\n")
+			})
 			return
 		}
 		p.Servers[address] = &ServerState{Conn: conn, Address: address}
-		p.Output.SetText(p.Output.GetText(true) + "Connected to server " + address + "\n")
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Connected to server " + address + "\n")
+		})
 
 	case strings.HasPrefix(cmd, "!s "):
 		parts := strings.SplitN(cmd, " ", 3)
 		if len(parts) < 3 {
-			p.Output.SetText(p.Output.GetText(true) + "Invalid format. Use '!send <server> <message>'\n")
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Invalid format. Use '!send <server> <message>'\n")
+			})
 			return
 		}
 		serverAddr, message := parts[1], parts[2]
 		server, ok := p.Servers[serverAddr]
 		if !ok {
-			p.Output.SetText(p.Output.GetText(true) + "No server found with the address" + serverAddr + "\n")
+			p.App.QueueUpdateDraw(func() {
+				p.Output.SetText(p.Output.GetText(true) + "Not connected to server " + serverAddr + "\n")
+			})
 			return
 		}
 		server.Conn.Write([]byte(message + "\n"))
@@ -130,14 +148,18 @@ func (p *PeerApp) processCommand(cmd string) {
 		for addr := range p.Clients {
 			response += addr + "\n"
 		}
-		p.Output.SetText(p.Output.GetText(true) + response)
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + response)
+		})
 
 	case cmd == "!ss":
 		response := "Connected servers:\n"
 		for addr, server := range p.Servers {
 			response += addr + " (" + server.Address + ")\n"
 		}
-		p.Output.SetText(p.Output.GetText(true) + response)
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + response)
+		})
 
 	case cmd == "!q":
 		for _, server := range p.Servers {
@@ -150,16 +172,19 @@ func (p *PeerApp) processCommand(cmd string) {
 		os.Exit(0)
 
 	case cmd == "!h":
-		p.Output.SetText(p.Output.GetText(true) + "Commands:\n" +
-			"\t!c <host:port> - connect to a server\n" +
-			"\t!s <server> <message> - send a message to a server\n" +
-			"\t!sa <message> - send a message to all servers\n" +
-			"\t!cs - list connected clients\n" +
-			"\t!ss - list connected servers\n" +
-			"\t!q - quit\n")
-
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Commands:\n" +
+				"\t!c <host:port> - connect to a server\n" +
+				"\t!s <server> <message> - send a message to a server\n" +
+				"\t!sa <message> - send a message to all servers\n" +
+				"\t!cs - list connected clients\n" +
+				"\t!ss - list connected servers\n" +
+				"\t!q - quit\n")
+		})
 	default:
-		p.Output.SetText(p.Output.GetText(true) + "Unknown command: " + cmd + "\n")
+		p.App.QueueUpdateDraw(func() {
+			p.Output.SetText(p.Output.GetText(true) + "Unknown command: " + cmd + "\n")
+		})
 	}
 
 	p.Output.ScrollToEnd()
