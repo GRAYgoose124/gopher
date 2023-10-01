@@ -25,10 +25,14 @@ type ServerState struct {
 var clients = make(map[string]*ClientState)
 var servers = make(map[string]*ServerState)
 
-// Initialize cview app
 var app = cview.NewApplication()
 var output = cview.NewTextView()
 var input = cview.NewInputField()
+
+var cmdHistory []string
+var currentCmdIndex int
+
+// End global state initialization
 
 func handleClientConnection(conn net.Conn) {
 	defer conn.Close()
@@ -68,6 +72,10 @@ func startServer(port string) {
 
 func processCommand(cmd string) {
 	output.SetText(output.GetText(true) + "> " + cmd + "\n")
+
+	cmdHistory = append(cmdHistory, cmd)
+	currentCmdIndex = len(cmdHistory)
+
 	switch {
 	case strings.HasPrefix(cmd, "!c "):
 		parts := strings.Split(cmd, " ")
@@ -148,18 +156,32 @@ func CLI() {
 	})
 
 	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
+		switch key {
+		case tcell.KeyEnter:
 			cmd := input.GetText()
 			input.SetText("")
 
-			// TODO: make processComand return string not print so we can print to output
 			processCommand(cmd)
-
 			app.SetFocus(input)
+		case tcell.KeyUp:
+			if len(cmdHistory) == 0 {
+				return
+			}
+			if currentCmdIndex > 0 {
+				currentCmdIndex--
+			}
+			input.SetText(cmdHistory[currentCmdIndex])
+		case tcell.KeyDown:
+			if currentCmdIndex < len(cmdHistory)-1 {
+				currentCmdIndex++
+				input.SetText(cmdHistory[currentCmdIndex])
+			} else {
+				input.SetText("")
+				currentCmdIndex = len(cmdHistory)
+			}
 		}
 	})
 
-	// Start the application event loop
 	app.Run()
 }
 
