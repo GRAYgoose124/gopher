@@ -149,6 +149,15 @@ func (p *PeerApp) processCommand(cmd string) {
 		p.App.Stop()
 		os.Exit(0)
 
+	case cmd == "!h":
+		p.Output.SetText(p.Output.GetText(true) + "Commands:\n" +
+			"\t!c <host:port> - connect to a server\n" +
+			"\t!s <server> <message> - send a message to a server\n" +
+			"\t!sa <message> - send a message to all servers\n" +
+			"\t!cs - list connected clients\n" +
+			"\t!ss - list connected servers\n" +
+			"\t!q - quit\n")
+
 	default:
 		p.Output.SetText(p.Output.GetText(true) + "Unknown command: " + cmd + "\n")
 	}
@@ -165,7 +174,7 @@ func (p *PeerApp) CLI() {
 	p.App.SetRoot(flex, true)
 	p.App.SetFocus(p.Input)
 
-	p.Output.SetText("Enter commands below:\n")
+	p.Output.SetText(" -- Welcome to Gopher --\n")
 	p.Output.SetDynamicColors(true)
 	p.Output.SetScrollable(true)
 	p.Output.SetChangedFunc(func() {
