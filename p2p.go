@@ -21,175 +21,194 @@ type ServerState struct {
 	Address string
 }
 
-// Initialize global state
-var clients = make(map[string]*ClientState)
-var servers = make(map[string]*ServerState)
+type PeerApp struct {
+	App            *cview.Application
+	Output         *cview.TextView
+	Input          *cview.InputField
+	Clients        map[string]*ClientState
+	Servers        map[string]*ServerState
+	CommandHistory []string
+	CurrentCmdIdx  int
+}
 
-var app = cview.NewApplication()
-var output = cview.NewTextView()
-var input = cview.NewInputField()
+func NewPeerApp() *PeerApp {
+	app := cview.NewApplication()
+	output := cview.NewTextView()
+	input := cview.NewInputField()
 
-var cmdHistory []string
-var currentCmdIndex int
+	return &PeerApp{
+		App:            app,
+		Output:         output,
+		Input:          input,
+		Clients:        make(map[string]*ClientState),
+		Servers:        make(map[string]*ServerState),
+		CommandHistory: []string{},
+		CurrentCmdIdx:  0,
+	}
+}
 
-// End global state initialization
-
-func handleClientConnection(conn net.Conn) {
+func (p *PeerApp) handleClientConnection(conn net.Conn) {
 	defer conn.Close()
 	addr := conn.RemoteAddr().String()
-	clients[addr] = &ClientState{Conn: conn}
-	defer delete(clients, addr)
+	p.Clients[addr] = &ClientState{Conn: conn}
+	defer delete(p.Clients, addr)
 
 	reader := bufio.NewReader(conn)
 	for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
-			output.SetText(output.GetText(true) + "Client " + addr + " disconnected.\n")
+			p.Output.SetText(p.Output.GetText(true) + "Client " + addr + " disconnected.\n")
 			return
 		}
-		output.SetText(output.GetText(true) + "Client " + addr + ": " + message)
+		p.Output.SetText(p.Output.GetText(true) + "Client " + addr + ": " + message)
 	}
 }
 
-func startServer(port string) {
+func (p *PeerApp) startServer(port string) {
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		output.SetText(output.GetText(true) + "Error starting server: " + err.Error() + "\n")
+		p.Output.SetText(p.Output.GetText(true) + "Error starting server: " + err.Error() + "\n")
 		return
 	}
 	defer ln.Close()
 
-	output.SetText(output.GetText(true) + "Listening on port " + port + "\n")
+	p.Output.SetText(p.Output.GetText(true) + "Listening on port " + port + "\n")
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		go handleClientConnection(conn)
+		go p.handleClientConnection(conn)
 	}
 }
 
-func processCommand(cmd string) {
-	output.SetText(output.GetText(true) + "> " + cmd + "\n")
+func (p *PeerApp) processCommand(cmd string) {
+	p.Output.SetText(p.Output.GetText(true) + "> " + cmd + "\n")
 
-	cmdHistory = append(cmdHistory, cmd)
-	currentCmdIndex = len(cmdHistory)
+	p.CommandHistory = append(p.CommandHistory, cmd)
+	p.CurrentCmdIdx = len(p.CommandHistory)
 
 	switch {
 	case strings.HasPrefix(cmd, "!c "):
 		parts := strings.Split(cmd, " ")
 		if len(parts) != 2 {
-			output.SetText(output.GetText(true) + "Invalid format. Use '!connect host:port'\n")
+			p.Output.SetText(p.Output.GetText(true) + "Invalid format. Use '!connect host:port'\n")
+			return
 		}
 		address := parts[1]
 		conn, err := net.Dial("tcp", address)
 		if err != nil {
-			output.SetText(output.GetText(true) + "Error connecting to server: " + err.Error() + "\n")
+			p.Output.SetText(p.Output.GetText(true) + "Error connecting to server: " + err.Error() + "\n")
+			return
 		}
-		servers[address] = &ServerState{Conn: conn, Address: address}
-		output.SetText(output.GetText(true) + "Connected to server " + address + "\n")
+		p.Servers[address] = &ServerState{Conn: conn, Address: address}
+		p.Output.SetText(p.Output.GetText(true) + "Connected to server " + address + "\n")
 
 	case strings.HasPrefix(cmd, "!s "):
 		parts := strings.SplitN(cmd, " ", 3)
 		if len(parts) < 3 {
-			output.SetText(output.GetText(true) + "Invalid format. Use '!send <server> <message>'\n")
+			p.Output.SetText(p.Output.GetText(true) + "Invalid format. Use '!send <server> <message>'\n")
+			return
 		}
 		serverAddr, message := parts[1], parts[2]
-		server, ok := servers[serverAddr]
+		server, ok := p.Servers[serverAddr]
 		if !ok {
-			output.SetText(output.GetText(true) + "No server found with the address" + serverAddr + "\n")
+			p.Output.SetText(p.Output.GetText(true) + "No server found with the address" + serverAddr + "\n")
+			return
 		}
 		server.Conn.Write([]byte(message + "\n"))
 
 	case strings.HasPrefix(cmd, "!sa "):
 		message := strings.TrimPrefix(cmd, "!sa ")
-		for _, server := range servers {
+		for _, server := range p.Servers {
 			server.Conn.Write([]byte(message + "\n"))
 		}
 
 	case cmd == "!cs":
 		response := "Connected clients:\n"
-		for addr := range clients {
+		for addr := range p.Clients {
 			response += addr + "\n"
 		}
-		output.SetText(output.GetText(true) + response)
+		p.Output.SetText(p.Output.GetText(true) + response)
 
 	case cmd == "!ss":
 		response := "Connected servers:\n"
-		for addr, server := range servers {
+		for addr, server := range p.Servers {
 			response += addr + " (" + server.Address + ")\n"
 		}
-		output.SetText(output.GetText(true) + response)
+		p.Output.SetText(p.Output.GetText(true) + response)
 
 	case cmd == "!q":
-		for _, server := range servers {
+		for _, server := range p.Servers {
 			server.Conn.Close()
 		}
-		for _, client := range clients {
+		for _, client := range p.Clients {
 			client.Conn.Close()
 		}
-		app.Stop()
+		p.App.Stop()
 		os.Exit(0)
 
 	default:
-		output.SetText(output.GetText(true) + "Unknown command: " + cmd + "\n")
+		p.Output.SetText(p.Output.GetText(true) + "Unknown command: " + cmd + "\n")
 	}
 
-	output.ScrollToEnd()
+	p.Output.ScrollToEnd()
 }
 
-func CLI() {
+func (p *PeerApp) CLI() {
 	flex := cview.NewFlex()
 	flex.SetDirection(cview.FlexRow)
-	flex.AddItem(output, 0, 1, false)
-	flex.AddItem(input, 1, 0, true)
+	flex.AddItem(p.Output, 0, 1, false)
+	flex.AddItem(p.Input, 1, 0, true)
 
-	app.SetRoot(flex, true)
-	app.SetFocus(input)
+	p.App.SetRoot(flex, true)
+	p.App.SetFocus(p.Input)
 
-	output.SetText("Enter commands below:\n")
-	output.SetDynamicColors(true)
-	output.SetScrollable(true)
-	output.SetChangedFunc(func() {
-		app.Draw()
+	p.Output.SetText("Enter commands below:\n")
+	p.Output.SetDynamicColors(true)
+	p.Output.SetScrollable(true)
+	p.Output.SetChangedFunc(func() {
+		p.App.Draw()
 	})
 
-	input.SetDoneFunc(func(key tcell.Key) {
+	p.Input.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
-			cmd := input.GetText()
-			input.SetText("")
+			cmd := p.Input.GetText()
+			p.Input.SetText("")
 
-			processCommand(cmd)
-			app.SetFocus(input)
+			p.processCommand(cmd)
+			p.App.SetFocus(p.Input)
 		case tcell.KeyUp:
-			if len(cmdHistory) == 0 {
+			if len(p.CommandHistory) == 0 {
 				return
 			}
-			if currentCmdIndex > 0 {
-				currentCmdIndex--
+			if p.CurrentCmdIdx > 0 {
+				p.CurrentCmdIdx--
 			}
-			input.SetText(cmdHistory[currentCmdIndex])
+			p.Input.SetText(p.CommandHistory[p.CurrentCmdIdx])
 		case tcell.KeyDown:
-			if currentCmdIndex < len(cmdHistory)-1 {
-				currentCmdIndex++
-				input.SetText(cmdHistory[currentCmdIndex])
+			if p.CurrentCmdIdx < len(p.CommandHistory)-1 {
+				p.CurrentCmdIdx++
+				p.Input.SetText(p.CommandHistory[p.CurrentCmdIdx])
 			} else {
-				input.SetText("")
-				currentCmdIndex = len(cmdHistory)
+				p.Input.SetText("")
+				p.CurrentCmdIdx = len(p.CommandHistory)
 			}
 		}
 	})
 
-	app.Run()
+	p.App.Run()
 }
 
 func main() {
 	portPtr := flag.String("p", "8080", "port to listen on")
 	flag.Parse()
 
-	go startServer(*portPtr)
+	peerApp := NewPeerApp()
 
-	CLI()
+	go peerApp.startServer(*portPtr)
+
+	peerApp.CLI()
 }
