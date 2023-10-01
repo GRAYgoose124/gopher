@@ -13,7 +13,8 @@ import (
 )
 
 type ClientState struct {
-	Conn net.Conn
+	Conn          net.Conn
+	BackConnected bool
 }
 
 type ServerState struct {
@@ -50,8 +51,27 @@ func NewPeerApp() *PeerApp {
 func (p *PeerApp) handleClientConnection(conn net.Conn) {
 	defer conn.Close()
 	addr := conn.RemoteAddr().String()
-	p.Clients[addr] = &ClientState{Conn: conn}
+	clientState := &ClientState{Conn: conn, BackConnected: false}
+	p.Clients[addr] = clientState
 	defer delete(p.Clients, addr)
+
+	if !clientState.BackConnected {
+		parts := strings.Split(addr, ":")
+		if len(parts) == 2 {
+			go func() {
+				backConn, err := net.Dial("tcp", addr)
+				if err != nil {
+					p.App.QueueUpdateDraw(func() {
+						p.Output.SetText(p.Output.GetText(true) + "Error creating back connection to client: " + err.Error() + "\n")
+					})
+					return
+				}
+				serverAddr := backConn.RemoteAddr().String()
+				p.Servers[serverAddr] = &ServerState{Conn: backConn, Address: serverAddr}
+				clientState.BackConnected = true
+			}()
+		}
+	}
 
 	reader := bufio.NewReader(conn)
 	for {
